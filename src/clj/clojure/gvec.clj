@@ -12,7 +12,7 @@
 
 ;(set! *warn-on-reflection* true)
 
-(deftype VecNode [edit arr])
+(deftype VecNode [^java.util.concurrent.atomic.AtomicReference edit arr])
 
 (def EMPTY-NODE (VecNode. nil (object-array 32)))
 
@@ -118,6 +118,17 @@
 
 (defmethod print-method ::VecSeq [v w]
   ((get (methods print-method) clojure.lang.ISeq) v w))
+
+(declare ->TVec)
+
+(defn- editable-root [^clojure.core.VecNode root]
+  (VecNode. (java.util.concurrent.atomic.AtomicReference. (Thread/currentThread))
+            (aclone ^objects (.-arr root))))
+
+(defn- editable-tail [^clojure.core.ArrayManager am tail]
+  (let [ret (.array am 32)]
+    (System/arraycopy tail 0 ret 0 (.alength am tail))
+    ret))
 
 (deftype Vec [^clojure.core.ArrayManager am ^int cnt ^int shift ^clojure.core.VecNode root tail _meta]
   Object
@@ -346,6 +357,10 @@
           (aset arr subidx (.doAssoc this (- level (int 5)) (aget arr subidx) i val))
           (VecNode. (.edit node) arr)))))
 
+  clojure.lang.IEditableCollection
+  (asTransient [this]
+    (->TVec am cnt shift (editable-root root) (editable-tail am tail)))
+
   java.lang.Comparable
   (compareTo [this o]
     (if (identical? this o)
@@ -493,3 +508,228 @@
      (if xn
        (recur (.cons v (first xn)) (next xn))
        v))))
+
+(definterface ITVecImpl
+  (ensureEditable [])
+  (^clojure.core.VecNode ensureEditable [^clojure.core.VecNode node ^int shift])
+  (editableArrayFor [^int i]))
+
+(deftype TVec [^clojure.core.ArrayManager am
+               ^:unsynchronized-mutable ^int cnt
+               ^:unsynchronized-mutable ^int shift
+               ^:unsynchronized-mutable ^clojure.core.VecNode root
+               ^:unsynchronized-mutable tail]
+  clojure.lang.Counted
+  (count [this]
+    (.ensureEditable this)
+    cnt)
+
+  clojure.core.IVecImpl
+  (tailoff [this]
+    (if (< cnt 32)
+      0
+      (bit-shift-left (bit-shift-right (dec cnt) 5) 5)))
+
+  (arrayFor [this i]
+    (if (and  (<= (int 0) i) (< i cnt))
+      (if (>= i (.tailoff this))
+        tail
+        (loop [node root level shift]
+          (if (zero? level)
+            (.arr node)
+            (recur (aget ^objects (.arr node) (bit-and (bit-shift-right i level) (int 0x1f))) 
+                   (- level (int 5))))))
+      (throw (IndexOutOfBoundsException.))))
+
+  (pushTail [this level parent tailnode]
+    (let [parent (.ensureEditable this parent level)
+          subidx (bit-and (bit-shift-right (dec cnt) level) 0x1f)
+          node-to-insert (if (== level 5)
+                           tailnode
+                           (let [child (aget ^objects (.-arr parent) subidx)]
+                             (if (nil? child)
+                               (.newPath this (.-edit root) level tailnode)
+                               (.pushTail this (- level 5) child tailnode))))]
+      (aset ^objects (.-arr parent) subidx node-to-insert)
+      parent))
+
+  (newPath [this edit ^int level node]
+    (if (zero? level)
+      node
+      (let [ret (VecNode. edit (object-array 32))]
+        (aset ^objects (.arr ret) 0 (.newPath this edit (- level (int 5)) node))
+        ret)))
+
+  (doAssoc [this ^int level node ^int i val]
+    (let [ret (.ensureEditable this node level)]
+      (if (zero? level)
+        (.aset am (.-arr ret) (bit-and i 0x1f) val)
+        (let [subidx (bit-and (bit-shift-right 1 level) 0x1f)]
+          (aset ^objects (.-arr ret) subidx
+                (.doAssoc this (- level 5) (aget ^objects (.-arr ret) subidx) i val))))
+      ret))
+
+  (popTail [this level node]
+    (let [node ^clojure.core.VecNode (.ensureEditable this node)
+          subidx (bit-and (bit-shift-right (- cnt (int 2)) level) (int 0x1f))]
+      (cond
+       (> level 5) 
+         (let [new-child (.popTail this (- level 5) (aget ^objects (.arr node) subidx))]
+           (if (and (nil? new-child) (zero? subidx))
+             nil
+             (let [arr (.-arr node)]
+               (aset ^objects arr subidx new-child)
+               node)))
+       (zero? subidx) nil
+       :else (let [arr (.-arr node)]
+               (aset ^objects arr subidx nil)
+               node))))
+
+  clojure.core.ITVecImpl
+  (ensureEditable [this]
+    (let [owner (.. root -edit (get))]
+      (if-not (identical? owner (Thread/currentThread))
+        (if (nil? owner)
+          (throw (IllegalAccessError. "Transient used after persistent! call"))
+          (throw (IllegalAccessError. "Transient used by non-owner thread"))))))
+
+  (ensureEditable [this node shift]
+    (if (identical? (.-edit node) (.-edit root))
+      node
+      (if (zero? shift)
+        (VecNode. (.-edit root) (.aclone am (.-arr node)))
+        (VecNode. (.-edit root) (aclone ^objects (.-arr node))))))
+
+  (editableArrayFor [this i]
+    (if (and  (<= (int 0) i) (< i cnt))
+      (if (>= i (.tailoff this))
+        tail
+        (loop [node root level shift]
+          (if (zero? level)
+            (.arr node)
+            (recur (.ensureEditable this (aget ^objects (.arr node) (bit-and (bit-shift-right i level) (int 0x1f))) level) 
+                   (- level (int 5))))))
+      (throw (IndexOutOfBoundsException.))))
+
+  clojure.lang.ITransientVector
+  (assocN [this i val]
+    (.ensureEditable this)
+    (if (and (>= i 0) (< i cnt))
+      (if (>= i (.tailoff this))
+        (do (.aset am tail (bit-and i 0x1f) val)
+            this)
+        (do (set! root (.doAssoc this shift root i val))
+            this))
+      (if (== i cnt)
+        (.conj this val)
+        (throw (IndexOutOfBoundsException.)))))
+
+  (pop [this]
+    (.ensureEditable this)
+    (cond
+      (zero? cnt) 
+      (throw (IllegalStateException. "Can't pop empty vector"))
+
+      (== 1 cnt) 
+      (do (set! cnt (int 0))
+          this)
+
+      (> (- cnt (.tailoff this)) 1)
+      (do (set! cnt (unchecked-dec-int cnt))
+          this)
+
+      :else
+      (let [new-tail (.editableArrayFor this (- cnt 2))
+            new-root ^clojure.core.VecNode (.popTail this shift root)]
+        (set! cnt  (unchecked-dec-int cnt))
+        (set! tail new-tail)
+        (cond
+          (nil? new-root)
+          (do (set! root (VecNode. (.-edit root) (object-array 32)))
+              this)
+
+          (and (> shift 5) (nil? (aget ^objects (.arr new-root) 1)))
+          (do (set! shift (unchecked-subtract-int shift (int 5)))
+              (set! root  (.ensureEditable this (aget ^objects (.-arr new-root) 0) shift))
+              this)
+
+          :else
+          (do (set! root new-root)
+              this)))))
+
+  clojure.lang.ITransientAssociative
+  (assoc [this key val]
+    (if (clojure.lang.Util/isInteger key)
+      (let [i (int key)]
+        (.assocN this i val))
+      (IllegalArgumentException. "Key must be integer")))
+
+  clojure.lang.ITransientCollection
+  (conj [this val]
+    (.ensureEditable this)
+    (if (< (- cnt (.tailoff this)) (int 32))
+      (do (.aset am tail (bit-and cnt (int 0x1f)) val)
+          (set! cnt (unchecked-inc-int cnt))
+          this)
+      (let [tail-node (VecNode. (.-edit root) tail)
+            new-tail  (.array am 32)]
+        (.aset am new-tail 0 val)
+        (set! tail new-tail)
+        (if (> (bit-shift-right cnt (int 5))
+               (bit-shift-left (int 1) shift))
+          (let [new-root-array (object-array 32)
+                new-shift      (unchecked-add-int shift (int 5))]
+            (aset ^objects new-root-array 0 root)
+            (aset ^objects new-root-array 1 (.newPath this (.-edit root) shift tail-node))
+            (set! root  (VecNode. (.-edit root) new-root-array))
+            (set! shift new-shift)
+            (set! cnt   (unchecked-inc-int cnt))
+            this)
+          (let [new-root (.pushTail this shift root tail-node)]
+            (set! root new-root)
+            (set! cnt  (unchecked-inc-int cnt))
+            this)))))
+
+  (persistent [this]
+    (.ensureEditable this)
+    (.. root -edit (set nil))
+    (let [trimmed-tail (.array am (- cnt (.tailoff this)))]
+      (System/arraycopy tail 0 trimmed-tail 0 (.alength am trimmed-tail))
+      (Vec. am cnt shift root trimmed-tail nil)))
+
+  clojure.lang.ILookup
+  (valAt [this k] (.valAt this k nil))
+
+  (valAt [this k not-found]
+    (if (clojure.lang.Util/isInteger k)
+      (let [i (int k)]
+        (if (and (>= i 0) (< i cnt))
+          (.nth this i)
+          not-found))
+      not-found))
+
+  clojure.lang.Indexed
+  (nth [this i]
+    (let [a (.arrayFor this i)]
+      (.aget am a (bit-and i (int 0x1f)))))
+
+  (nth [this i not-found]
+    (let [z (int 0)]
+      (if (and (>= i z) (< i (.count this)))
+        (.nth this i)
+        not-found)))
+
+  clojure.lang.IFn
+  (invoke [this k]
+    (if (clojure.lang.Util/isInteger k)
+      (let [i (int k)]
+        (if (and (>= i 0) (< i cnt))
+          (.nth this i)
+          (throw (IndexOutOfBoundsException.))))
+      (throw (IllegalArgumentException. "Key must be integer"))))
+
+  (applyTo [this args]
+    (let [len (clojure.lang.RT/boundedLength args 20)]
+      (if (== len 1)
+        (.invoke this (first args))
+        (throw (clojure.lang.ArityException. len "transient gvec"))))))
