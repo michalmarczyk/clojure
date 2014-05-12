@@ -16,6 +16,8 @@ import java.lang.ref.Reference;
 import java.math.BigInteger;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.lang.ref.SoftReference;
 import java.lang.ref.ReferenceQueue;
@@ -168,13 +170,28 @@ public static int hasheq(Object o){
 		return dohasheq((IHashEq) o);	
 	if(o instanceof Number)
 		return Numbers.hasheq((Number)o);
-	if(o instanceof String)
-		return Murmur3.hashInt(o.hashCode());
-	return o.hashCode();
+        if(o instanceof Iterable || o instanceof Map.Entry || o instanceof Map)
+                return doalienhasheq(o);
+        return Murmur3.hashInt(o.hashCode());
 }
 
 private static int dohasheq(IHashEq o) {
 	return o.hasheq();
+}
+
+private static int doalienhasheq(Object o) {
+        if (o instanceof Map.Entry) {
+                Map.Entry e = (Map.Entry) o;
+                IHashEq v = (IHashEq) RT.list(e.getKey(), e.getValue());
+                return v.hasheq();
+        }
+        if (o instanceof Map)
+                return Murmur3.hashUnordered(((Map) o).entrySet());
+        if (o instanceof Set)
+                return Murmur3.hashUnordered((Set) o);
+        if (o instanceof List)
+                return Murmur3.hashOrdered((List) o);
+        return Murmur3.hashInt(o.hashCode());
 }
 
 static public int hashCombine(int seed, int hash){
