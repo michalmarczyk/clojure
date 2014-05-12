@@ -32,6 +32,7 @@ package clojure.lang;
 
 import java.io.Serializable;
 import java.nio.ByteBuffer;
+import java.util.Map;
 
 /**
  * See http://smhasher.googlecode.com/svn/trunk/MurmurHash3.cpp
@@ -117,6 +118,22 @@ public static int hashUnordered(Iterable xs){
 	for(Object x : xs)
 		{
 		hash += Util.hasheq(x);
+		++n;
+		}	
+
+	return mixCollHash(hash, n);
+}
+
+public static int hashAlienMapEntry(Map.Entry entry){
+        return mixCollHash(31 * (31 + Util.hasheq(entry.getKey())) + Util.hasheq(entry.getValue()), 2);
+}
+
+public static int hashAlienEntrySet(Iterable<Map.Entry> entryset){
+	int hash = 0;
+	int n = 0;
+	for(Map.Entry x : entryset)
+		{
+                hash += hashAlienMapEntry(x);
 		++n;
 		}	
 
