@@ -37,7 +37,14 @@
 (def
  ^{:macro true
    :added "1.0"}
- loop (fn* loop [&form &env & decl] (cons 'loop* decl)))
+ loop (fn* loop [&form &env & decl] (cons 'loop* (cons nil decl))))
+
+(def
+ ^{:macro true
+   :added "1.0"}
+ recur (fn* recur [&form &env & args] (cons 'recur* (cons nil args))))
+
+(. (var recur) (setMacro))
 
 (def
  ^{:macro true
@@ -4547,14 +4554,30 @@
   "Evaluates the exprs in a lexical context in which the symbols in
   the binding-forms are bound to their respective init-exprs or parts
   therein. Acts as a recur target."
-  {:added "1.0", :special-form true, :forms '[(loop [bindings*] exprs*)]}
-  [bindings & body]
+  {:added "1.0", :special-form true, :forms '[(loop loop-name? [bindings*] exprs*)]}
+  [loop-name? & [bindings :as body]]
     (assert-args
-      (vector? bindings) "a vector for its binding"
-      (even? (count bindings)) "an even number of forms in binding vector")
-    (let [db (destructure bindings)]
+      (or (and (or (nil? loop-name?)
+                   (symbol? loop-name?))
+               (vector? bindings))
+          (vector? loop-name?))
+      "a vector for its binding"
+      (even? (count (if (vector? loop-name?)
+                      loop-name?
+                      bindings)))
+      "an even number of forms in binding vector")
+    (let [loop-name (if (vector? loop-name?)
+                      nil
+                      loop-name?)
+          bindings (if (vector? loop-name?)
+                     loop-name?
+                     bindings)
+          body (if (vector? loop-name?)
+                 body
+                 (next body))
+          db (destructure bindings)]
       (if (= db bindings)
-        `(loop* ~bindings ~@body)
+        `(loop* ~loop-name ~bindings ~@body)
         (let [vs (take-nth 2 (drop 1 bindings))
               bs (take-nth 2 bindings)
               gs (map (fn [b] (if (symbol? b) b (gensym))) bs)
@@ -4564,9 +4587,19 @@
                               (conj ret g v b g)))
                           [] (map vector bs vs gs))]
           `(let ~bfs
-             (loop* ~(vec (interleave gs gs))
+             (loop* ~loop-name ~(vec (interleave gs gs))
                (let ~(vec (interleave bs gs))
                  ~@body)))))))
+
+(defmacro recur-to
+  "Recur to the recur point (loop or current fn method) named loop-name. As a
+  special case, a loop-name of nil targets the nearest (innermost) recur point,
+  whether named or not (in other words, recur-to with a loop-name of nil is
+  equivalent to plain recur). NB. recur-to must be in tail position with
+  respect to the targeted recur point (and all intervening recur points)."
+  {:added "1.9" :special-form true}
+  [loop-name & args]
+  `(recur* ~loop-name ~@args))
 
 (defmacro when-first
   "bindings => x xs

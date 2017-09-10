@@ -14,7 +14,8 @@
 
 (ns clojure.test-clojure.control
   (:use clojure.test
-        clojure.test-helper))
+        clojure.test-helper)
+  (:import (clojure.lang Compiler$CompilerException)))
 
 ;; *** Helper functions ***
 
@@ -63,6 +64,7 @@
 ;; loop/recur
 (deftest test-loop
   (are [x y] (= x y)
+       nil (loop [])
        1 (loop []
            1)
        3 (loop [a 1]
@@ -82,7 +84,143 @@
                           (next b))
                    a))
        )
-  )
+  (is (thrown? Compiler$CompilerException
+               (eval '(loop []
+                        (recur)
+                        :recur-not-in-tail-position))))
+  (is (thrown? Compiler$CompilerException
+               (eval '(loop []
+                        (try
+                          (recur)
+                          (catch Throwable _)))))))
+
+(deftest test-named-loop
+  (are [x y] (= x y)
+       nil (loop nil [])
+       nil (loop foo [])
+       9 (loop foo [x 3 a 0]
+           (if (zero? x)
+             a
+             (loop [y 3 b 0]
+               (if (zero? y)
+                 (recur-to foo (dec x) (+ a b))
+                 (recur (dec y) (inc b))))))
+       378 (let [m [[[1 2 3] [4 5 6] [7 8 9]]
+                    [[10 11 12] [13 14 15] [16 17 18]]
+                    [[19 20 21] [22 23 24] [25 26 27]]]]
+             (loop iloop [i 0 ires 0]
+               (if (== i (count m))
+                 ires
+                 (loop jloop [j 0 jres 0]
+                   (if (== j (count (get m i)))
+                     (recur-to iloop (inc i) (+ ires jres))
+                     (loop [k 0 kres 0]
+                       (if (== k (count (get-in m [i j])))
+                         (recur-to jloop (inc j) (+ jres kres))
+                         (recur (inc k) (+ kres (get-in m [i j k]))))))))))
+       10 (loop foo [x 0]
+            (if (pos? x)
+              x
+              (loop bar [x 3]
+                (if-not (== x 3)
+                  (throw (Exception.)))
+                (loop bar [y 5]
+                  (if (< y 7)
+                    (recur-to bar (inc y))
+                    (recur-to foo (+ x y))))))))
+  (is (thrown? Compiler$CompilerException
+               (eval '(loop foo []
+                        (loop []
+                          (recur-to foo)
+                          :recur-to-not-in-tail-position)))))
+  (is (thrown? Compiler$CompilerException
+               (eval '(loop foo []
+                        (loop bar []
+                          (loop []
+                            (recur-to unknown-loop-label)))))))
+  (is (thrown? Compiler$CompilerException
+               (eval '(loop recur-across-try []
+                        (try
+                          (recur-to recur-across-try)
+                          (catch Throwable _)))))))
+
+
+;; fn/recur
+
+(deftest test-fn-recur
+  (are [x y] (= x y)
+    3 ((fn [a]
+         (if (< a 3)
+           (recur (inc a))
+           a))
+        1)
+    [2 4 6] ((fn [a b]
+               (if (seq b)
+                 (recur (conj a (* 2 (first b)))
+                        (next b))
+                 a))
+              []
+              [1 2 3])
+    [6 4 2] ((fn [a b]
+               (if (seq b)
+                 (recur (conj a (* 2 (first b)))
+                        (next b))
+                 a))
+              ()
+              [1 2 3])
+    )
+  (is (thrown? Compiler$CompilerException
+               (eval '(fn []
+                        (recur)
+                        :recur-not-in-tail-position)))))
+
+(deftest test-named-fn-recur-to
+  (are [x y] (= x y)
+    9 ((fn foo [x a]
+         (if (zero? x)
+           a
+           (loop [y 3 b 0]
+             (if (zero? y)
+               (recur-to foo (dec x) (+ a b))
+               (recur (dec y) (inc b))))))
+        3
+        0)
+    378 (let [m [[[1 2 3] [4 5 6] [7 8 9]]
+                 [[10 11 12] [13 14 15] [16 17 18]]
+                 [[19 20 21] [22 23 24] [25 26 27]]]]
+          ((fn iloop [i ires]
+             (if (== i (count m))
+               ires
+               (loop jloop [j 0 jres 0]
+                 (if (== j (count (get m i)))
+                   (recur-to iloop (inc i) (+ ires jres))
+                   (loop [k 0 kres 0]
+                     (if (== k (count (get-in m [i j])))
+                       (recur-to jloop (inc j) (+ jres kres))
+                       (recur (inc k) (+ kres (get-in m [i j k])))))))))
+            0
+            0))
+    10 ((fn foo [x]
+          (if (pos? x)
+            x
+            (loop bar [x 3]
+              (if-not (== x 3)
+                (throw (Exception.)))
+              (loop bar [y 5]
+                (if (< y 7)
+                  (recur-to bar (inc y))
+                  (recur-to foo (+ x y)))))))
+         0))
+  (is (thrown? Compiler$CompilerException
+               (eval '(fn foo []
+                        (loop []
+                          (recur-to foo)
+                          :recur-to-not-in-tail-position)))))
+  (is (thrown? Compiler$CompilerException
+               (eval '(fn foo []
+                        (loop bar []
+                          (loop []
+                            (recur-to unknown-loop-label))))))))
 
 
 ;; throw, try
