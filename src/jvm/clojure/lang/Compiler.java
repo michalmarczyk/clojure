@@ -40,6 +40,7 @@ public class Compiler implements Opcodes{
 static final Symbol DEF = Symbol.intern("def");
 static final Symbol LOOP = Symbol.intern("loop*");
 static final Symbol RECUR = Symbol.intern("recur");
+static final Symbol RECUR_TO = Symbol.intern("recur-to");
 static final Symbol IF = Symbol.intern("if");
 static final Symbol LET = Symbol.intern("let*");
 static final Symbol LETFN = Symbol.intern("letfn*");
@@ -106,6 +107,7 @@ static final public IPersistentMap specials = PersistentHashMap.create(
 		DEF, new DefExpr.Parser(),
 		LOOP, new LetExpr.Parser(),
 		RECUR, new RecurExpr.Parser(),
+		RECUR_TO, new RecurExpr.Parser(),
 		IF, new IfExpr.Parser(),
 		CASE, new CaseExpr.Parser(),
 		LET, new LetExpr.Parser(),
@@ -194,10 +196,13 @@ static
 static final public Var LOCAL_ENV = Var.create(null).setDynamic();
 
 //vector<localbinding>
-static final public Var LOOP_LOCALS = Var.create().setDynamic();
+static final public Var LOOP_LOCALS = Var.create(null).setDynamic();
 
-//Label
-static final public Var LOOP_LABEL = Var.create().setDynamic();
+//vector<symbol>
+static final public Var LOOP_NAME = Var.create(null).setDynamic();
+
+//list<looprecord>
+static final public Var LOOP_RECORDS = Var.create(null).setDynamic();
 
 //vector<object>
 static final public Var CONSTANTS = Var.create().setDynamic();
@@ -5350,7 +5355,8 @@ public static class FnMethod extends ObjMethod{
 					RT.mapUniqueKeys(
 							METHOD, method,
 							LOCAL_ENV, LOCAL_ENV.deref(),
-							LOOP_LOCALS, null,
+							LOOP_LOCALS, LOOP_LOCALS.deref(),
+							LOOP_NAME, LOOP_NAME.deref(),
 							NEXT_LOCAL_NUM, 0
                             ,CLEAR_PATH, pnode
                             ,CLEAR_ROOT, pnode
@@ -5451,7 +5457,8 @@ public static class FnMethod extends ObjMethod{
 				}
 			if(method.reqParms.count() > MAX_POSITIONAL_ARITY)
 				throw Util.runtimeException("Can't specify more than " + MAX_POSITIONAL_ARITY + " params");
-			LOOP_LOCALS.set(argLocals);
+			LOOP_LOCALS.set(RT.cons(argLocals, LOOP_LOCALS.deref()));
+			LOOP_NAME.set(RT.cons(objx.thisName != null ? Symbol.intern(null, objx.thisName) : null, LOOP_NAME.deref()));
 			method.argLocals = argLocals;
 //			if(canBeDirect)
 			method.argtypes = argtypes.toArray(new Type[argtypes.size()]);
@@ -5508,10 +5515,11 @@ public static class FnMethod extends ObjMethod{
 		                                            cv);
 		gen.visitCode();
 		Label loopLabel = gen.mark();
+		LoopRecord loopRecord = LoopRecord.create(objx.thisName, loopLabel);
 		gen.visitLineNumber(line, loopLabel);
 		try
 			{
-			Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+			Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref()), METHOD, this));
 			emitBody(objx, gen, retClass, body);
 
 			Label end = gen.mark();
@@ -5611,10 +5619,11 @@ public static class FnMethod extends ObjMethod{
 		gen.visitCode();
 
 		Label loopLabel = gen.mark();
+		LoopRecord loopRecord = LoopRecord.create(objx.thisName, loopLabel);
 		gen.visitLineNumber(line, loopLabel);
 		try
 			{
-			Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+			Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref()), METHOD, this));
 			emitBody(objx, gen, retClass, body);
 
 			Label end = gen.mark();
@@ -5671,10 +5680,11 @@ public static class FnMethod extends ObjMethod{
 		gen.visitCode();
 
 		Label loopLabel = gen.mark();
+		LoopRecord loopRecord = LoopRecord.create(objx.thisName, loopLabel);
 		gen.visitLineNumber(line, loopLabel);
 		try
 			{
-			Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+			Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref()), METHOD, this));
 
 			body.emit(C.RETURN, fn, gen);
 			Label end = gen.mark();
@@ -5874,10 +5884,11 @@ abstract public static class ObjMethod{
 		gen.visitCode();
 
 		Label loopLabel = gen.mark();
+		LoopRecord loopRecord = LoopRecord.create(objx.thisName, loopLabel);
 		gen.visitLineNumber(line, loopLabel);
 		try
 			{
-			Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+			Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref()), METHOD, this));
 
 			body.emit(C.RETURN, fn, gen);
 			Label end = gen.mark();
@@ -6307,12 +6318,32 @@ public static class LetFnExpr implements Expr{
 	}
 }
 
+public static class LoopRecord {
+	public final Symbol name;
+	public final Label label;
+
+	LoopRecord(Symbol name, Label label) {
+		this.name = name;
+		this.label = label;
+	}
+
+	public static LoopRecord create(String name, Label label) {
+		return new LoopRecord(name == null ? null : Symbol.intern(null, name), label);
+	}
+
+    public static LoopRecord create(Symbol name, Label label) {
+        return new LoopRecord(name, label);
+	}
+}
+
 public static class LetExpr implements Expr, MaybePrimitiveExpr{
+	public final Symbol name;
 	public final PersistentVector bindingInits;
 	public final Expr body;
 	public final boolean isLoop;
 
-	public LetExpr(PersistentVector bindingInits, Expr body, boolean isLoop){
+	public LetExpr(Symbol name, PersistentVector bindingInits, Expr body, boolean isLoop){
+		this.name = name;
 		this.bindingInits = bindingInits;
 		this.body = body;
 		this.isLoop = isLoop;
@@ -6323,14 +6354,24 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 			ISeq form = (ISeq) frm;
 			//(let [var val var2 val2 ...] body...)
 			boolean isLoop = RT.first(form).equals(LOOP);
-			if(!(RT.second(form) instanceof IPersistentVector))
+			boolean named = false;
+			Symbol loopName = null;
+
+			if (isLoop && (RT.second(form) == null || RT.second(form) instanceof Symbol))
+				{
+				named = true;
+				loopName = (Symbol) RT.second(form);
+				}
+
+			Object bindingForm = named ? RT.third(form) : RT.second(form);
+			if(!(bindingForm instanceof IPersistentVector))
 				throw new IllegalArgumentException("Bad binding form, expected vector");
 
-			IPersistentVector bindings = (IPersistentVector) RT.second(form);
+			IPersistentVector bindings = (IPersistentVector) bindingForm;
 			if((bindings.count() % 2) != 0)
 				throw new IllegalArgumentException("Bad binding form, expected matched symbol expression pairs");
 
-			ISeq body = RT.next(RT.next(form));
+			ISeq body = named ? RT.next(RT.next(RT.next(form))) : RT.next(RT.next(form));
 
 			if(context == C.EVAL
 			   || (context == C.EXPRESSION && isLoop))
@@ -6356,7 +6397,9 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 				PathNode clearroot = new PathNode(PATHTYPE.PATH,looproot);
 				PathNode clearpath = new PathNode(PATHTYPE.PATH,looproot);
 				if(isLoop)
-					dynamicBindings = dynamicBindings.assoc(LOOP_LOCALS, null);
+					dynamicBindings = dynamicBindings
+							.assoc(LOOP_LOCALS, LOOP_LOCALS.deref())
+							.assoc(LOOP_NAME, LOOP_NAME.deref());
 
 				try
 					{
@@ -6409,8 +6452,10 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 							    Var.popThreadBindings();
 							}
 						}
-					if(isLoop)
-						LOOP_LOCALS.set(loopLocals);
+					if(isLoop) {
+						LOOP_LOCALS.set(RT.cons(loopLocals, LOOP_LOCALS.deref()));
+						LOOP_NAME.set(RT.cons(loopName, LOOP_NAME.deref()));
+					}
 					Expr bodyExpr;
 					boolean moreMismatches = false;
 					try {
@@ -6442,7 +6487,7 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 							}
 						}
 					if(!moreMismatches)
-						return new LetExpr(bindingInits, bodyExpr, isLoop);
+						return new LetExpr(loopName, bindingInits, bodyExpr, isLoop);
 					}
 				finally
 					{
@@ -6487,11 +6532,12 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 			bindingLabels.put(bi, gen.mark());
 			}
 		Label loopLabel = gen.mark();
+		LoopRecord loopRecord = LoopRecord.create(name, loopLabel);
 		if(isLoop)
 			{
 			try
 				{
-				Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel));
+				Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref())));
 				if(emitUnboxed)
 					((MaybePrimitiveExpr)body).emitUnboxed(context, objx, gen);
 				else
@@ -6541,6 +6587,7 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 }
 
 public static class RecurExpr implements Expr, MaybePrimitiveExpr{
+	public final Symbol loopName;
 	public final IPersistentVector args;
 	public final IPersistentVector loopLocals;
 	final int line;
@@ -6548,7 +6595,8 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 	final String source;
 
 
-	public RecurExpr(IPersistentVector loopLocals, IPersistentVector args, int line, int column, String source){
+	public RecurExpr(Symbol loopName, IPersistentVector loopLocals, IPersistentVector args, int line, int column, String source){
+		this.loopName = loopName;
 		this.loopLocals = loopLocals;
 		this.args = args;
 		this.line = line;
@@ -6561,9 +6609,24 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 	}
 
 	public void emit(C context, ObjExpr objx, GeneratorAdapter gen){
-		Label loopLabel = (Label) LOOP_LABEL.deref();
+		Label loopLabel = null;
+		if (loopName == null) {
+			loopLabel = ((LoopRecord) RT.first(LOOP_RECORDS.deref())).label;
+		} else {
+            Object loopRecords = LOOP_RECORDS.deref();
+			do {
+                LoopRecord record = (LoopRecord) RT.first(loopRecords);
+				if (record == null)
+					break;
+				if (loopName.equals(record.name)) {
+					loopLabel = record.label;
+					break;
+				}
+				loopRecords = RT.next(loopRecords);
+			} while (loopLabel == null);
+		}
 		if(loopLabel == null)
-			throw new IllegalStateException();
+			throw new IllegalStateException("No matching recur* target");
 		for(int i = 0; i < loopLocals.count(); i++)
 			{
 			LocalBinding lb = (LocalBinding) loopLocals.nth(i);
@@ -6648,20 +6711,37 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 			String source = (String) SOURCE.deref();
 
 			ISeq form = (ISeq) frm;
-			IPersistentVector loopLocals = (IPersistentVector) LOOP_LOCALS.deref();
+			boolean isRecurTo = RT.first(frm).equals(RECUR_TO);
+			IPersistentVector loopLocals = (IPersistentVector) RT.first(LOOP_LOCALS.deref());
 			if(context != C.RETURN || loopLocals == null)
 				throw new UnsupportedOperationException("Can only recur from tail position");
                         if(NO_RECUR.deref() != null)
                             throw new UnsupportedOperationException("Cannot recur across try");
+			if (isRecurTo && form.next() == null)
+				throw new IllegalArgumentException("Must specify loop name in recur-to (possibly nil)");
+			Symbol loopName = isRecurTo ? (Symbol) form.next().first() : null;
+			if (loopName != null) {
+				ISeq loopNameSeq = (ISeq) LOOP_NAME.deref();
+				ISeq loopLocalsSeq = (ISeq) LOOP_LOCALS.deref();
+				while (loopNameSeq != null) {
+					Symbol ln = (Symbol) RT.first(loopNameSeq);
+					if (ln != null && loopName.equals(ln)) {
+						loopLocals = (IPersistentVector) loopLocalsSeq.first();
+						break;
+					}
+					loopNameSeq = loopNameSeq.next();
+					loopLocalsSeq = loopLocalsSeq.next();
+				}
+			}
 			PersistentVector args = PersistentVector.EMPTY;
-			for(ISeq s = RT.seq(form.next()); s != null; s = s.next())
+			for(ISeq s = RT.seq(isRecurTo ? form.next().next() : form.next()); s != null; s = s.next())
 				{
 				args = args.cons(analyze(C.EXPRESSION, s.first()));
 				}
 			if(args.count() != loopLocals.count())
 				throw new IllegalArgumentException(
-						String.format("Mismatched argument count to recur, expected: %d args, got: %d",
-						              loopLocals.count(), args.count()));
+						String.format("Mismatched argument count to %s, expected: %d args, got: %d",
+						              form.first().toString(), loopLocals.count(), args.count()));
 			for(int i = 0;i< loopLocals.count();i++)
 				{
 				LocalBinding lb = (LocalBinding) loopLocals.nth(i);
@@ -6699,7 +6779,7 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 						}
 					}
 				}
-			return new RecurExpr(loopLocals, args, line, column, source);
+			return new RecurExpr(loopName, loopLocals, args, line, column, source);
 		}
 	}
 
@@ -7587,7 +7667,8 @@ public static Object load(Reader rdr, String sourcePath, String sourceName) {
 			       SOURCE, sourceName,
 			       METHOD, null,
 			       LOCAL_ENV, null,
-					LOOP_LOCALS, null,
+					LOOP_LOCALS, LOOP_LOCALS.deref(),
+					LOOP_NAME, LOOP_NAME.deref(),
 					NEXT_LOCAL_NUM, 0,
 					RT.READEVAL, RT.T,
 			       RT.CURRENT_NS, RT.CURRENT_NS.deref(),
@@ -7727,7 +7808,8 @@ public static Object compile(Reader rdr, String sourcePath, String sourceName) t
 			       SOURCE, sourceName,
 			       METHOD, null,
 			       LOCAL_ENV, null,
-					LOOP_LOCALS, null,
+					LOOP_LOCALS, LOOP_LOCALS.deref(),
+					LOOP_NAME, LOOP_NAME.deref(),
 					NEXT_LOCAL_NUM, 0,
 					RT.READEVAL, RT.T,
 					RT.CURRENT_NS, RT.CURRENT_NS.deref(),
@@ -8425,7 +8507,8 @@ public static class NewInstanceMethod extends ObjMethod{
 					RT.mapUniqueKeys(
 							METHOD, method,
 							LOCAL_ENV, LOCAL_ENV.deref(),
-							LOOP_LOCALS, null,
+							LOOP_LOCALS, LOOP_LOCALS.deref(),
+							LOOP_NAME, LOOP_NAME.deref(),
 							NEXT_LOCAL_NUM, 0
                             ,CLEAR_PATH, pnode
                             ,CLEAR_ROOT, pnode
@@ -8521,7 +8604,8 @@ public static class NewInstanceMethod extends ObjMethod{
 				if(pclasses[i] == long.class || pclasses[i] == double.class)
 					getAndIncLocalNum();
 				}
-			LOOP_LOCALS.set(argLocals);
+			LOOP_LOCALS.set(RT.cons(argLocals, LOOP_LOCALS.deref()));
+			LOOP_NAME.set(RT.cons(objx.thisName != null ? Symbol.intern(null, objx.thisName) : null, LOOP_NAME.deref()));
 			method.name = name.name;
 			method.methodMeta = RT.meta(name);
 			method.parms = parms;
@@ -8583,11 +8667,12 @@ public static class NewInstanceMethod extends ObjMethod{
 		gen.visitCode();
 
 		Label loopLabel = gen.mark();
+		LoopRecord loopRecord = LoopRecord.create(name, loopLabel);
 
 		gen.visitLineNumber(line, loopLabel);
 		try
 			{
-			Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+			Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref()), METHOD, this));
 
 			emitBody(objx, gen, retClass, body);
 			Label end = gen.mark();
