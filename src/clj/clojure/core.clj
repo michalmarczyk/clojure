@@ -42,13 +42,6 @@
 (def
  ^{:macro true
    :added "1.0"}
- recur (fn* recur [&form &env & args] (cons 'recur* (cons nil args))))
-
-(. (var recur) (setMacro))
-
-(def
- ^{:macro true
-   :added "1.0"}
  fn (fn* fn [&form &env & decl] 
          (.withMeta ^clojure.lang.IObj (cons 'fn* decl) 
                     (.meta ^clojure.lang.IMeta &form))))
@@ -4590,16 +4583,6 @@
              (loop* ~loop-name ~(vec (interleave gs gs))
                (let ~(vec (interleave bs gs))
                  ~@body)))))))
-
-(defmacro recur-to
-  "Recur to the recur point (loop or current fn method) named loop-name. As a
-  special case, a loop-name of nil targets the nearest (innermost) recur point,
-  whether named or not (in other words, recur-to with a loop-name of nil is
-  equivalent to plain recur). NB. recur-to must be in tail position with
-  respect to the targeted recur point (and all intervening recur points)."
-  {:added "1.9" :special-form true}
-  [loop-name & args]
-  `(recur* ~loop-name ~@args))
 
 (defmacro when-first
   "bindings => x xs

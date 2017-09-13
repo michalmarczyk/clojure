@@ -39,7 +39,8 @@ public class Compiler implements Opcodes{
 
 static final Symbol DEF = Symbol.intern("def");
 static final Symbol LOOP = Symbol.intern("loop*");
-static final Symbol RECUR = Symbol.intern("recur*");
+static final Symbol RECUR = Symbol.intern("recur");
+static final Symbol RECUR_TO = Symbol.intern("recur-to");
 static final Symbol IF = Symbol.intern("if");
 static final Symbol LET = Symbol.intern("let*");
 static final Symbol LETFN = Symbol.intern("letfn*");
@@ -106,6 +107,7 @@ static final public IPersistentMap specials = PersistentHashMap.create(
 		DEF, new DefExpr.Parser(),
 		LOOP, new LetExpr.Parser(),
 		RECUR, new RecurExpr.Parser(),
+		RECUR_TO, new RecurExpr.Parser(),
 		IF, new IfExpr.Parser(),
 		CASE, new CaseExpr.Parser(),
 		LET, new LetExpr.Parser(),
@@ -6702,14 +6704,15 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 			String source = (String) SOURCE.deref();
 
 			ISeq form = (ISeq) frm;
+			boolean isRecurTo = RT.first(frm).equals(RECUR_TO);
 			IPersistentVector loopLocals = (IPersistentVector) RT.first(LOOP_LOCALS.deref());
 			if(context != C.RETURN || loopLocals == null)
 				throw new UnsupportedOperationException("Can only recur from tail position");
                         if(NO_RECUR.deref() != null)
                             throw new UnsupportedOperationException("Cannot recur across try");
-			if (form.next() == null)
-				throw new IllegalArgumentException("Must specify loop name in recur (possibly nil)");
-			Symbol loopName = (Symbol) form.next().first();
+			if (isRecurTo && form.next() == null)
+				throw new IllegalArgumentException("Must specify loop name in recur-to (possibly nil)");
+			Symbol loopName = isRecurTo ? (Symbol) form.next().first() : null;
 			if (loopName != null) {
 				ISeq loopNameSeq = (ISeq) LOOP_NAME.deref();
 				ISeq loopLocalsSeq = (ISeq) LOOP_LOCALS.deref();
@@ -6724,14 +6727,14 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 				}
 			}
 			PersistentVector args = PersistentVector.EMPTY;
-			for(ISeq s = RT.seq(form.next().next()); s != null; s = s.next())
+			for(ISeq s = RT.seq(isRecurTo ? form.next().next() : form.next()); s != null; s = s.next())
 				{
 				args = args.cons(analyze(C.EXPRESSION, s.first()));
 				}
 			if(args.count() != loopLocals.count())
 				throw new IllegalArgumentException(
-						String.format("Mismatched argument count to recur, expected: %d args, got: %d",
-						              loopLocals.count(), args.count()));
+						String.format("Mismatched argument count to %s, expected: %d args, got: %d",
+						              form.first().toString(), loopLocals.count(), args.count()));
 			for(int i = 0;i< loopLocals.count();i++)
 				{
 				LocalBinding lb = (LocalBinding) loopLocals.nth(i);

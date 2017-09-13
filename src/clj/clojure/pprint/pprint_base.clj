@@ -383,7 +383,7 @@ THIS FUNCTION IS NOT YET IMPLEMENTED."
                    (let [form (macroexpand form)] 
                      (condp = (first form)
                        'loop* form
-                       'recur* `(recur* ~(second form) (inc ~var-sym) ~@(nnext form)) #_(concat `(recur (inc ~var-sym)) (rest form))
+                       'recur (concat `(recur (inc ~var-sym)) (rest form))
                        (walk inner identity form)))
                    form))]
     (walk inner identity body)))
