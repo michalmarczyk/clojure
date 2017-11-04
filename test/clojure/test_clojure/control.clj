@@ -223,6 +223,68 @@
                             (recur-to unknown-loop-label))))))))
 
 
+;; defn/recur-to
+
+(defn test-foo-1
+  ([x a]
+   (if (zero? x)
+     a
+     (loop [y 3 b 0]
+       (if (zero? y)
+         (recur-to test-foo-1 (dec x) (+ a b))
+         (recur (dec y) (inc b))))))
+  ([x y a]
+   (if (zero? x)
+     a
+     (loop [z y b 0]
+       (if (zero? z)
+         (recur-to test-foo-1 (dec x) (dec y) (+ a b))
+         (recur (dec z) (inc b)))))))
+
+(let [m [[[1 2 3] [4 5 6] [7 8 9]]
+         [[10 11 12] [13 14 15] [16 17 18]]
+         [[19 20 21] [22 23 24] [25 26 27]]]]
+
+  (defn test-foo-2 [i ires]
+    (if (== i (count m))
+      ires
+      (loop jloop [j 0 jres 0]
+        (if (== j (count (get m i)))
+          (recur-to test-foo-2 (inc i) (+ ires jres))
+          (loop [k 0 kres 0]
+            (if (== k (count (get-in m [i j])))
+              (recur-to jloop (inc j) (+ jres kres))
+              (recur (inc k) (+ kres (get-in m [i j k]))))))))))
+
+(defn test-foo-3 [x]
+  (if (pos? x)
+    x
+    (loop bar [x 3]
+      (if-not (== x 3)
+        (throw (Exception.)))
+      (loop bar [y 5]
+        (if (< y 7)
+          (recur-to bar (inc y))
+          (recur-to test-foo-3 (+ x y)))))))
+
+(deftest test-defn-recur-to
+  (are [x y] (= x y)
+    9 (test-foo-1 3 0)
+    12 (test-foo-1 3 5 0)
+    378 (test-foo-2 0 0)
+    10 (test-foo-3 0))
+  (is (thrown? Compiler$CompilerException
+               (eval '(defn test-foo-4 []
+                        (loop []
+                          (recur-to test-foo-4)
+                          :recur-to-not-in-tail-position)))))
+  (is (thrown? Compiler$CompilerException
+               (eval '(defn test-foo-5 []
+                        (loop bar []
+                          (loop []
+                            (recur-to unknown-loop-label))))))))
+
+
 ;; throw, try
 
 ; if: see logic.clj
