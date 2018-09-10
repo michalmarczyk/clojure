@@ -6537,7 +6537,10 @@ public static class LetExpr implements Expr, MaybePrimitiveExpr{
 			{
 			try
 				{
-				Var.pushThreadBindings(RT.map(LOOP_RECORDS, RT.cons(loopRecord, LOOP_RECORDS.deref())));
+				Object loopRecords = context == C.RETURN ?
+                                     RT.cons(loopRecord, LOOP_RECORDS.deref()) :
+                                     RT.list(loopRecord);
+				Var.pushThreadBindings(RT.map(LOOP_RECORDS, loopRecords));
 				if(emitUnboxed)
 					((MaybePrimitiveExpr)body).emitUnboxed(context, objx, gen);
 				else
@@ -6626,7 +6629,7 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 			} while (loopLabel == null);
 		}
 		if(loopLabel == null)
-			throw new IllegalStateException("No matching recur* target");
+			throw new IllegalStateException("No matching recur/recur-to target");
 		for(int i = 0; i < loopLocals.count(); i++)
 			{
 			LocalBinding lb = (LocalBinding) loopLocals.nth(i);
@@ -6725,7 +6728,7 @@ public static class RecurExpr implements Expr, MaybePrimitiveExpr{
 				ISeq loopLocalsSeq = (ISeq) LOOP_LOCALS.deref();
 				while (loopNameSeq != null) {
 					Symbol ln = (Symbol) RT.first(loopNameSeq);
-					if (ln != null && loopName.equals(ln)) {
+					if (loopName.equals(ln)) {
 						loopLocals = (IPersistentVector) loopLocalsSeq.first();
 						break;
 					}
