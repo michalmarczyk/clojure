@@ -4601,7 +4601,7 @@
                  (next body))
           db (destructure bindings)]
       (if (= db bindings)
-        `(loop* ~loop-name ~bindings ~@body)
+        `(loop* ~@(if loop-name [loop-name]) ~bindings ~@body)
         (let [vs (take-nth 2 (drop 1 bindings))
               bs (take-nth 2 bindings)
               gs (map (fn [b] (if (symbol? b) b (gensym))) bs)
@@ -4611,7 +4611,7 @@
                               (conj ret g v b g)))
                           [] (map vector bs vs gs))]
           `(let ~bfs
-             (loop* ~loop-name ~(vec (interleave gs gs))
+             (loop* ~@(if loop-name [loop-name]) ~(vec (interleave gs gs))
                (let ~(vec (interleave bs gs))
                  ~@body)))))))
 
