@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>org.clojure</groupId>
+  <groupId>org.clojars.michalmarczyk</groupId>
   <artifactId>clojure</artifactId>
   <name>clojure</name>
   <packaging>jar</packaging>
-  <version>1.10.0-master-SNAPSHOT</version>
+  <version>1.10.0-alpha7recurto1</version>
 
   <url>http://clojure.org/</url>
   <description>Clojure core environment and runtime library.</description>
@@ -81,11 +81,17 @@
   </dependencies>
 
   <distributionManagement>
-    <snapshotRepository>
+    <!-- <snapshotRepository> -->
       <!-- This id is linked to the key setup on the CI server -->
-      <id>sonatype-nexus-staging</id>
-      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
-    </snapshotRepository>
+      <!-- <id>sonatype-nexus-staging</id> -->
+      <!-- <url>https://oss.sonatype.org/content/repositories/snapshots</url> -->
+    <!-- </snapshotRepository> -->
+
+    <repository>
+      <id>clojars</id>
+      <name>Clojars repository</name>
+      <url>https://clojars.org/repo</url>
+    </repository>
   </distributionManagement>
 
   <build>
@@ -236,18 +242,18 @@
       </plugin>
 
       <!-- deploy artifacts to sonatype -->
-      <plugin>
-        <groupId>org.sonatype.plugins</groupId>
-        <artifactId>nexus-staging-maven-plugin</artifactId>
-        <version>1.6.7</version>
-        <extensions>true</extensions>
-        <configuration>
+      <!-- <plugin> -->
+      <!--   <groupId>org.sonatype.plugins</groupId> -->
+      <!--   <artifactId>nexus-staging-maven-plugin</artifactId> -->
+      <!--   <version>1.6.7</version> -->
+      <!--   <extensions>true</extensions> -->
+      <!--   <configuration> -->
           <!-- The server "id" element from settings to use authentication from -->
-          <serverId>sonatype-nexus-staging</serverId>
-          <nexusUrl>https://oss.sonatype.org/</nexusUrl>
-          <autoReleaseAfterClose>true</autoReleaseAfterClose>
-        </configuration>
-      </plugin>
+      <!--     <serverId>sonatype-nexus-staging</serverId> -->
+      <!--     <nexusUrl>https://oss.sonatype.org/</nexusUrl> -->
+      <!--     <autoReleaseAfterClose>true</autoReleaseAfterClose> -->
+      <!--   </configuration> -->
+      <!-- </plugin> -->
 
     </plugins>
   </build>
