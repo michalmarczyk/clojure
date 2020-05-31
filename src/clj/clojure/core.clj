@@ -37,7 +37,7 @@
 (def
  ^{:macro true
    :added "1.0"}
- loop (fn* loop [&form &env & decl] (cons 'loop* decl)))
+ loop (fn* loop [&form &env & decl] (cons 'loop* (cons nil decl))))
 
 (def
  ^{:macro true
@@ -326,12 +326,13 @@
                     (assoc m :inline (cons ifn (cons (clojure.lang.Symbol/intern (.concat (.getName ^clojure.lang.Symbol name) "__inliner"))
                                                      (next inline))))
                     m))
-              m (conj (if (meta name) (meta name) {}) m)]
+              m (conj (if (meta name) (meta name) {}) m)
+              fn-meta (with-meta `fn {:loop-name (.getName ^clojure.lang.Named name)})]
           (list 'def (with-meta name m)
                 ;;todo - restore propagation of fn name
                 ;;must figure out how to convey primitive hints to self calls first
 								;;(cons `fn fdecl)
-								(with-meta (cons `fn fdecl) {:rettag (:tag m)})))))
+								(with-meta (cons fn-meta fdecl) {:rettag (:tag m)})))))
 
 (. (var defn) (setMacro))
 
@@ -4495,21 +4496,38 @@
 
 (defn ^{:private true}
   maybe-destructured
-  [params body]
-  (if (every? symbol? params)
-    (cons params body)
-    (loop [params params
-           new-params (with-meta [] (meta params))
-           lets []]
-      (if params
-        (if (symbol? (first params))
-          (recur (next params) (conj new-params (first params)) lets)
-          (let [gparam (gensym "p__")]
-            (recur (next params) (conj new-params gparam)
-                   (-> lets (conj (first params)) (conj gparam)))))
-        `(~new-params
-          (let ~lets
-            ~@body))))))
+  ([params body]
+   (maybe-destructured params nil body))
+  ([params maybe-loop-name body]
+   (letfn* [make-loop-bindings
+            (fn [params]
+              (let [loop-locals (->> params
+                                     (remove #{'&})
+                                     (map #(with-meta % nil)))]
+                (vec (interleave loop-locals loop-locals))))]
+     (if (every? symbol? params)
+       (if maybe-loop-name
+         (let [loop-bindings (make-loop-bindings params)]
+           (list params (list* 'loop* maybe-loop-name loop-bindings body)))
+         (cons params body))
+      (loop [params params
+             new-params (with-meta [] (meta params))
+             lets []]
+        (if params
+          (if (symbol? (first params))
+            (recur (next params) (conj new-params (first params)) lets)
+            (let [gparam (gensym "p__")]
+              (recur (next params) (conj new-params gparam)
+                     (-> lets (conj (first params)) (conj gparam)))))
+          (if maybe-loop-name
+            (let [loop-bindings (make-loop-bindings new-params)]
+              `(~new-params
+                 (loop* ~maybe-loop-name ~loop-bindings
+                                         (let ~lets
+                                           ~@body))))
+            `(~new-params
+               (let ~lets
+                 ~@body)))))))))
 
 ;redefine fn with destructuring and pre/post conditions
 (defmacro fn
@@ -4535,6 +4553,8 @@
                                    (first sigs)
                                    " should be a vector")
                               (str "Parameter declaration missing"))))))
+          loop-name (if-let [ln (:loop-name (meta (first &form)))]
+                      (symbol ln))
           psig (fn* [sig]
                  ;; Ensure correct type before destructuring sig
                  (when (not (seq? sig))
@@ -4566,8 +4586,9 @@
                               (concat (map (fn* [c] `(assert ~c)) pre) 
                                       body)
                               body)]
-                   (maybe-destructured params body)))
-          new-sigs (map psig sigs)]
+                   (maybe-destructured params loop-name body)))
+          new-sigs (map psig sigs)
+          fn*-meta (with-meta 'fn* (meta (first &form)))]
       (with-meta
         (if name
           (list* 'fn* name new-sigs)
@@ -4578,14 +4599,30 @@
   "Evaluates the exprs in a lexical context in which the symbols in
   the binding-forms are bound to their respective init-exprs or parts
   therein. Acts as a recur target."
-  {:added "1.0", :special-form true, :forms '[(loop [bindings*] exprs*)]}
-  [bindings & body]
+  {:added "1.0", :special-form true, :forms '[(loop loop-name? [bindings*] exprs*)]}
+  [loop-name? & [bindings :as body]]
     (assert-args
-      (vector? bindings) "a vector for its binding"
-      (even? (count bindings)) "an even number of forms in binding vector")
-    (let [db (destructure bindings)]
+      (or (and (or (nil? loop-name?)
+                   (symbol? loop-name?))
+               (vector? bindings))
+          (vector? loop-name?))
+      "a vector for its binding"
+      (even? (count (if (vector? loop-name?)
+                      loop-name?
+                      bindings)))
+      "an even number of forms in binding vector")
+    (let [loop-name (if (vector? loop-name?)
+                      nil
+                      loop-name?)
+          bindings (if (vector? loop-name?)
+                     loop-name?
+                     bindings)
+          body (if (vector? loop-name?)
+                 body
+                 (next body))
+          db (destructure bindings)]
       (if (= db bindings)
-        `(loop* ~bindings ~@body)
+        `(loop* ~@(if loop-name [loop-name]) ~bindings ~@body)
         (let [vs (take-nth 2 (drop 1 bindings))
               bs (take-nth 2 bindings)
               gs (map (fn [b] (if (symbol? b) b (gensym))) bs)
@@ -4595,7 +4632,7 @@
                               (conj ret g v b g)))
                           [] (map vector bs vs gs))]
           `(let ~bfs
-             (loop* ~(vec (interleave gs gs))
+             (loop* ~@(if loop-name [loop-name]) ~(vec (interleave gs gs))
                (let ~(vec (interleave bs gs))
                  ~@body)))))))
 
